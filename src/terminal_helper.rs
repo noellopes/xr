@@ -20,15 +20,16 @@
     DEALINGS IN THE SOFTWARE.
 */
 
+use std::{fmt::Display, io::Write};
 use termcolor::{Color, ColorSpec, StandardStream, WriteColor};
 
-pub struct Output {
-    pub stdout: StandardStream,
+pub struct TerminalOutput {
+    stdout: StandardStream,
 }
 
-impl Output {
-    pub fn new() -> Output {
-        Output {
+impl TerminalOutput {
+    pub fn new() -> TerminalOutput {
+        TerminalOutput {
             stdout: StandardStream::stdout(termcolor::ColorChoice::Auto),
         }
     }
@@ -41,11 +42,32 @@ impl Output {
         self.set_color_spec(ColorSpec::new().set_fg(Some(color)));
     }
 
-    pub fn set_default_color(&mut self) {
+    fn set_default_color(&mut self) {
         self.set_color_spec(&termcolor::ColorSpec::new());
     }
 
-    pub fn set_success_color(&mut self) {
+    fn set_success_color(&mut self) {
         self.set_color(Color::Green);
+    }
+
+    fn set_error_color(&mut self) {
+        self.set_color(Color::Red);
+    }
+
+    pub fn writeln_success<T: Display>(&mut self, text: T) {
+        self.set_success_color();
+        write!(&mut self.stdout, "{text}").ok();
+        self.set_default_color();
+    }
+
+    pub fn writeln_error<T: Display>(&mut self, text: T) {
+        self.set_error_color();
+        write!(&mut self.stdout, "Error: ").ok();
+        self.set_default_color();
+        writeln!(&mut self.stdout, "{text}").ok();
+    }
+
+    pub fn writeln<T: Display>(&mut self, text: T) {
+        writeln!(&mut self.stdout, "{text}").ok();
     }
 }

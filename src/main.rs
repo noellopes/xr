@@ -20,32 +20,48 @@
     DEALINGS IN THE SOFTWARE.
 */
 
-use std::{io::Write, path::PathBuf};
+use std::{fs, path::PathBuf};
 
 mod arguments;
 use arguments::Args;
 
 mod terminal_helper;
+use terminal_helper::TerminalOutput;
 
 fn main() {
-    let mut output = terminal_helper::Output::new();
+    let mut output = TerminalOutput::new();
 
     let args = Args::obtain();
 
-    writeln!(&mut output.stdout, "XR Parser").ok();
+    output.writeln("XR Parser");
     let version = env!("CARGO_PKG_VERSION");
-    writeln!(&mut output.stdout, "version {version}").ok();
+    output.writeln(format!("version {version}"));
 
     let filenames = args.files_to_process();
 
     for f in &filenames {
-        writeln!(&mut output.stdout, "Processing file {:?}", f).ok();
-        process_file(&f);
+        process_file(f, &mut output);
     }
 
-    output.set_success_color();
-    writeln!(&mut output.stdout, "{} file(s) processed", filenames.len()).ok();
-    output.set_default_color();
+    output.writeln_success(format!("{} file(s) processed", filenames.len()));
 }
 
-fn process_file(path: &PathBuf) {}
+fn process_file(file: &PathBuf, output: &mut TerminalOutput) {
+    let filename = file.to_str().unwrap_or_default();
+
+    output.writeln(format!("Processing file '{filename}'"));
+
+    match fs::read_to_string(file) {
+        Ok(data) => generate_file(file, data, output),
+        Err(_) => output.writeln_error(format!("Could not read file '{filename}'")),
+    }
+}
+
+fn generate_file(original_file: &PathBuf, _data: String, output: &mut TerminalOutput) {
+    let mut new_file = original_file.clone();
+
+    if !new_file.set_extension("rs") {
+        output.writeln_error("Could not generate output file");
+    } else {
+    }
+}

@@ -40,10 +40,9 @@ impl Args {
     }
 
     fn working_dir(self) -> PathBuf {
-        if let Some(dir) = self.directory {
-            dir
-        } else {
-            std::env::current_dir().unwrap_or(PathBuf::from("."))
+        match self.directory {
+            Some(dir) => dir,
+            None => std::env::current_dir().unwrap_or(PathBuf::from(".")),
         }
     }
 

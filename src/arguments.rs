@@ -58,9 +58,12 @@ impl Args {
                 .into_iter()
                 .filter_map(|e| e.ok())
             {
-                let filename = entry.file_name();
-                if filename.to_string_lossy().to_lowercase().ends_with(".xr") {
-                    filenames.push(entry.path().to_path_buf());
+                let filename = entry.path();
+
+                if let Some(extension) = filename.extension() {
+                    if extension.to_ascii_lowercase() == "xr" {
+                        filenames.push(filename.to_path_buf());
+                    }
                 }
             }
             filenames

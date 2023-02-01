@@ -8,11 +8,11 @@ mod terminal_helper;
 #[derive(Parser, Debug)]
 #[command(author, version, about = "XR parser", long_about = None)]
 struct Args {
-    #[arg(short, long)]
+    #[arg(short, long, group = "files")]
     directory: Option<PathBuf>,
 
-    #[arg(short, long)]
-    filenames: Vec<PathBuf>,
+    #[arg(short, long, group = "files")]
+    filenames: Option<Vec<PathBuf>>,
 }
 
 impl Args {
@@ -21,6 +21,26 @@ impl Args {
             dir
         } else {
             std::env::current_dir().unwrap_or(PathBuf::from("."))
+        }
+    }
+
+    fn files_to_process(self) -> Vec<PathBuf> {
+        if let Some(filenames) = self.filenames {
+            filenames
+        } else {
+            let mut filenames = Vec::<PathBuf>::new();
+
+            for entry in WalkDir::new(self.working_dir())
+                .follow_links(true)
+                .into_iter()
+                .filter_map(|e| e.ok())
+            {
+                let filename = entry.file_name();
+                if filename.to_string_lossy().to_lowercase().ends_with(".xr") {
+                    filenames.push(entry.path().to_path_buf());
+                }
+            }
+            filenames
         }
     }
 }
@@ -34,25 +54,17 @@ fn main() {
     let version = env!("CARGO_PKG_VERSION");
     writeln!(&mut output.stdout, "version {version}").ok();
 
-    let mut files_processed = 0;
+    let filenames = args.files_to_process();
 
-    for entry in WalkDir::new(args.working_dir())
-        .follow_links(true)
-        .into_iter()
-        .filter_map(|e| e.ok())
-    {
-        let filename = entry.file_name();
-        if filename.to_string_lossy().to_lowercase().ends_with(".xr") {
-            process_file(entry.path());
-            files_processed += 1
-        }
+    for f in &filenames {
+        process_file(&f);
     }
 
     output.set_success_color();
-    println!("{files_processed} files processed");
+    println!("{} file(s) processed", filenames.len());
     output.set_default_color();
 }
 
-fn process_file(path: &Path) {
+fn process_file(path: &PathBuf) {
     println!("Processing file {:?}", path);
 }

@@ -25,12 +25,14 @@ use termcolor::{Color, ColorSpec, StandardStream, WriteColor};
 
 pub struct TerminalOutput {
     stdout: StandardStream,
+    stderr: StandardStream,
 }
 
 impl TerminalOutput {
     pub fn new() -> TerminalOutput {
         TerminalOutput {
             stdout: StandardStream::stdout(termcolor::ColorChoice::Auto),
+            stderr: StandardStream::stderr(termcolor::ColorChoice::Auto),
         }
     }
 
@@ -62,9 +64,9 @@ impl TerminalOutput {
 
     pub fn writeln_error<T: Display>(&mut self, text: T) {
         self.set_error_color();
-        write!(&mut self.stdout, "Error: ").ok();
+        write!(&mut self.stderr, "Error: ").ok();
         self.set_default_color();
-        writeln!(&mut self.stdout, "{text}").ok();
+        writeln!(&mut self.stderr, "{text}").ok();
     }
 
     pub fn writeln<T: Display>(&mut self, text: T) {

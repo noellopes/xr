@@ -28,7 +28,42 @@ pub struct TerminalOutput {
     stderr: StandardStream,
 }
 
+#[inline]
+fn set_color(stream: &mut StandardStream, color_spec: &ColorSpec) {
+    stream.set_color(color_spec).ok();
+}
+
+#[inline]
+fn default_color_spec() -> ColorSpec {
+    ColorSpec::new()
+}
+
+#[inline]
+fn bold_color_spec() -> ColorSpec {
+    let mut color = ColorSpec::new();
+    color.set_bold(true);
+    color
+}
+
+#[inline]
+fn colored_bold_color_spec(c: Color) -> ColorSpec {
+    let mut color = bold_color_spec();
+    color.set_fg(Some(c));
+    color
+}
+
+#[inline]
+fn error_color_spec() -> ColorSpec {
+    colored_bold_color_spec(Color::Red)
+}
+
+#[inline]
+fn success_color_spec() -> ColorSpec {
+    colored_bold_color_spec(Color::Green)
+}
+
 impl TerminalOutput {
+    #[inline]
     pub fn new() -> TerminalOutput {
         TerminalOutput {
             stdout: StandardStream::stdout(termcolor::ColorChoice::Auto),
@@ -36,39 +71,22 @@ impl TerminalOutput {
         }
     }
 
-    fn set_color_spec(&mut self, color_spec: &ColorSpec) {
-        self.stdout.set_color(color_spec).ok();
-    }
-
-    fn set_color(&mut self, color: Color) {
-        self.set_color_spec(ColorSpec::new().set_fg(Some(color)));
-    }
-
-    fn set_default_color(&mut self) {
-        self.set_color_spec(&termcolor::ColorSpec::new());
-    }
-
-    fn set_success_color(&mut self) {
-        self.set_color(Color::Green);
-    }
-
-    fn set_error_color(&mut self) {
-        self.set_color(Color::Red);
-    }
-
+    #[inline]
     pub fn writeln_success<T: Display>(&mut self, text: T) {
-        self.set_success_color();
+        set_color(&mut self.stdout, &success_color_spec());
         write!(&mut self.stdout, "{text}").ok();
-        self.set_default_color();
+        set_color(&mut self.stdout, &default_color_spec());
     }
 
+    #[inline]
     pub fn writeln_error<T: Display>(&mut self, text: T) {
-        self.set_error_color();
+        set_color(&mut self.stderr, &error_color_spec());
         write!(&mut self.stderr, "Error: ").ok();
-        self.set_default_color();
+        set_color(&mut self.stderr, &default_color_spec());
         writeln!(&mut self.stderr, "{text}").ok();
     }
 
+    #[inline]
     pub fn writeln<T: Display>(&mut self, text: T) {
         writeln!(&mut self.stdout, "{text}").ok();
     }

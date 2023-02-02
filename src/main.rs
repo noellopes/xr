@@ -20,7 +20,11 @@
     DEALINGS IN THE SOFTWARE.
 */
 
-use std::{fs, path::PathBuf};
+use std::{
+    fs::{self, File},
+    io::Write,
+    path::PathBuf,
+};
 
 mod arguments;
 use arguments::Args;
@@ -52,16 +56,94 @@ fn process_file(file: &PathBuf, output: &mut TerminalOutput) {
     output.writeln(format!("Processing file '{filename}'"));
 
     match fs::read_to_string(file) {
-        Ok(data) => generate_file(file, data, output),
+        Ok(contents) => generate_file(file, contents, output),
         Err(_) => output.writeln_error(format!("Could not read file '{filename}'")),
     }
 }
 
-fn generate_file(original_file: &PathBuf, _data: String, output: &mut TerminalOutput) {
+#[derive(Copy, Clone, PartialEq)]
+enum Token {
+    Space,
+    Other,
+    None,
+}
+
+struct Sequence<'a> {
+    token: Token,
+    text: &'a str,
+}
+
+fn generate_file(original_file: &PathBuf, contents: String, output: &mut TerminalOutput) {
     let mut new_file = original_file.clone();
 
     if !new_file.set_extension("rs") {
-        output.writeln_error("Could not generate output file");
+        output.writeln_error("Failed to generate output file");
     } else {
+        let filename = new_file.to_str().unwrap_or_default();
+
+        let result = parse_spaces(&contents);
+
+        if let Ok(mut file) = File::create(&new_file) {
+            for t in result {
+                match t.token {
+                    Token::Space => {
+                        if file.write_all(format!("[{}]", t.text).as_bytes()).is_err() {
+                            output.writeln_error(format!("Failed to write to file '{filename}'"));
+                            return;
+                        }
+                    }
+                    Token::Other => {
+                        if file.write_all(t.text.as_bytes()).is_err() {
+                            output.writeln_error(format!("Failed to write to file '{filename}'"));
+                            return;
+                        }
+                    }
+                    Token::None => (),
+                }
+            }
+        } else {
+            output.writeln_error(format!("Failed to create file '{filename}'"));
+        }
     }
+}
+
+fn parse_spaces(text: &str) -> Vec<Sequence> {
+    let mut result = Vec::<Sequence>::new();
+
+    //let mut previous_sequence: Option<Sequence> = None;
+    let mut last_token = Token::None;
+    let mut start_index: usize = 0;
+    let mut end_index: usize = 0;
+
+    for (i, c) in text.char_indices() {
+        let token = if c.is_whitespace() {
+            Token::Space
+        } else {
+            Token::Other
+        };
+
+        if token == last_token {
+            end_index = i;
+        } else {
+            if token != Token::None {
+                result.push(Sequence {
+                    token: last_token,
+                    text: &text[start_index..end_index + 1],
+                });
+            }
+
+            last_token = token;
+            start_index = i;
+            end_index = i;
+        }
+    }
+
+    if last_token != Token::None {
+        result.push(Sequence {
+            token: last_token,
+            text: &text[start_index..end_index + 1],
+        });
+    }
+
+    result
 }

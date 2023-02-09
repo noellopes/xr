@@ -29,6 +29,9 @@ use std::{
 mod arguments;
 use arguments::Args;
 
+mod parser;
+use parser::Token;
+
 mod terminal_helper;
 use terminal_helper::TerminalOutput;
 
@@ -61,18 +64,6 @@ fn process_file(file: &PathBuf, output: &mut TerminalOutput) {
     }
 }
 
-#[derive(Copy, Clone, PartialEq)]
-enum Token {
-    Space,
-    Other,
-    None,
-}
-
-struct Sequence<'a> {
-    token: Token,
-    text: &'a str,
-}
-
 fn generate_file(original_file: &PathBuf, contents: String, output: &mut TerminalOutput) {
     let mut new_file = original_file.clone();
 
@@ -81,69 +72,27 @@ fn generate_file(original_file: &PathBuf, contents: String, output: &mut Termina
     } else {
         let filename = new_file.to_str().unwrap_or_default();
 
-        let result = parse_spaces(&contents);
+        let result = parser::parse(&contents);
 
         if let Ok(mut file) = File::create(&new_file) {
             for t in result {
                 match t.token {
                     Token::Space => {
-                        if file.write_all(format!("[{}]", t.text).as_bytes()).is_err() {
+                        if file.write_all(format!("{}", t.text).as_bytes()).is_err() {
                             output.writeln_error(format!("Failed to write to file '{filename}'"));
                             return;
                         }
                     }
                     Token::Other => {
-                        if file.write_all(t.text.as_bytes()).is_err() {
+                        if file.write_all(format!("[{}]", t.text).as_bytes()).is_err() {
                             output.writeln_error(format!("Failed to write to file '{filename}'"));
                             return;
                         }
                     }
-                    Token::None => (),
                 }
             }
         } else {
             output.writeln_error(format!("Failed to create file '{filename}'"));
         }
     }
-}
-
-fn parse_spaces(text: &str) -> Vec<Sequence> {
-    let mut result = Vec::<Sequence>::new();
-
-    //let mut previous_sequence: Option<Sequence> = None;
-    let mut last_token = Token::None;
-    let mut start_index: usize = 0;
-    let mut end_index: usize = 0;
-
-    for (i, c) in text.char_indices() {
-        let token = if c.is_whitespace() {
-            Token::Space
-        } else {
-            Token::Other
-        };
-
-        if token == last_token {
-            end_index = i;
-        } else {
-            if token != Token::None {
-                result.push(Sequence {
-                    token: last_token,
-                    text: &text[start_index..end_index + 1],
-                });
-            }
-
-            last_token = token;
-            start_index = i;
-            end_index = i;
-        }
-    }
-
-    if last_token != Token::None {
-        result.push(Sequence {
-            token: last_token,
-            text: &text[start_index..end_index + 1],
-        });
-    }
-
-    result
 }

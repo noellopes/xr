@@ -77,14 +77,17 @@ fn generate_file(original_file: &PathBuf, contents: String, output: &mut Termina
         if let Ok(mut file) = File::create(&new_file) {
             for t in result {
                 match t.token {
-                    Token::Space => {
-                        if file.write_all(format!("{}", t.text).as_bytes()).is_err() {
+                    Token::NewLine => {
+                        if file
+                            .write_all(format!("-->{}<--", t.text).as_bytes())
+                            .is_err()
+                        {
                             output.writeln_error(format!("Failed to write to file '{filename}'"));
                             return;
                         }
                     }
-                    Token::Other => {
-                        if file.write_all(format!("[{}]", t.text).as_bytes()).is_err() {
+                    _ => {
+                        if file.write_all(t.text.as_bytes()).is_err() {
                             output.writeln_error(format!("Failed to write to file '{filename}'"));
                             return;
                         }

@@ -25,6 +25,7 @@ use std::{iter, str::CharIndices};
 #[derive(Copy, Clone, PartialEq)]
 pub enum Token {
     Space,
+    NewLine,
     Other,
 }
 
@@ -76,10 +77,9 @@ impl<'a> Parser<'a> {
     }
 
     fn parsed_str(&self) -> &'a str {
-        if let Some((end_index, _)) = self.current_item {
-            &self.text[self.start_index..end_index]
-        } else {
-            &self.text[self.start_index..]
+        match self.current_item {
+            Some((end_index, _)) => &self.text[self.start_index..end_index],
+            None => &self.text[self.start_index..],
         }
     }
 }
@@ -89,29 +89,35 @@ pub fn parse(text: &str) -> Vec<Sequence> {
     let mut result = Vec::<Sequence>::new();
 
     while let Some(c) = parser.begin_parsing() {
-        let sequence = if c.is_whitespace() {
-            parser.parse_while(|p| match p.current_item {
-                None | Some((_, '\r' | '\n')) => false,
-                Some((_, c)) => c.is_whitespace(),
-            });
+        let token = match c {
+            '\r' | '\n' => {
+                parser.parse_while(|p| matches!(p.current_item, Some((_, '\r' | '\n'))));
 
-            Sequence {
-                token: Token::Space,
-                text: parser.parsed_str(),
+                Token::NewLine
             }
-        } else {
-            parser.parse_while(|p| match p.current_item {
-                None => false,
-                Some((_, c)) => !c.is_whitespace(),
-            });
+            _ => {
+                if c.is_whitespace() {
+                    parser.parse_while(|p| match p.current_item {
+                        None | Some((_, '\r' | '\n')) => false,
+                        Some((_, c)) => c.is_whitespace(),
+                    });
 
-            Sequence {
-                token: Token::Other,
-                text: parser.parsed_str(),
+                    Token::Space
+                } else {
+                    parser.parse_while(|p| match p.current_item {
+                        None => false,
+                        Some((_, c)) => !c.is_whitespace(),
+                    });
+
+                    Token::Other
+                }
             }
         };
 
-        result.push(sequence);
+        result.push(Sequence {
+            token,
+            text: parser.parsed_str(),
+        });
     }
 
     result

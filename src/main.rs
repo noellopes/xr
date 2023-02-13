@@ -75,27 +75,31 @@ fn generate_file(original_file: &PathBuf, contents: String, output: &mut Termina
         let result = parser::parse(&contents);
 
         if let Ok(mut file) = File::create(&new_file) {
-            for t in result {
-                match t.token {
-                    Token::NewLine => {
-                        if file
-                            .write_all(format!("-->{}<--", t.text).as_bytes())
-                            .is_err()
-                        {
-                            output.writeln_error(format!("Failed to write to file '{filename}'"));
-                            return;
-                        }
-                    }
-                    _ => {
-                        if file.write_all(t.text.as_bytes()).is_err() {
-                            output.writeln_error(format!("Failed to write to file '{filename}'"));
-                            return;
-                        }
-                    }
-                }
+            if !write_output_to_file(file, result) {
+                output.writeln_error(format!("Failed to write to file '{filename}'"));
             }
         } else {
             output.writeln_error(format!("Failed to create file '{filename}'"));
         }
     }
+}
+
+fn write_output_to_file(mut file: File, result: Vec<parser::Sequence>) -> bool {
+    if file.write_all("1. ".as_bytes()).is_err() {
+        return false;
+    }
+
+    for t in result {
+        let success = match t.token {
+            Token::NewLine(line_number) => file
+                .write_all(format!("{}{}. ", t.text, line_number).as_bytes())
+                .is_ok(),
+            _ => file.write_all(format!("[{}]", t.text).as_bytes()).is_ok(),
+        };
+
+        if !success {
+            return false;
+        }
+    }
+    true
 }

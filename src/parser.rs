@@ -24,8 +24,7 @@ use std::{iter, str::CharIndices};
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum Token {
-    Space,
-    NewLine,
+    NewLine(usize),
     Other,
 }
 
@@ -57,9 +56,23 @@ impl<'a> Parser<'a> {
     fn begin_parsing(&mut self) -> Option<char> {
         if let Some((current_index, c)) = self.current_item {
             self.start_index = current_index;
+            self.next();
             Some(c)
         } else {
             None
+        }
+    }
+
+    fn next(&mut self) {
+        self.current_item = self.iterator.next();
+    }
+
+    fn parse_loop<P>(&mut self, predicate: P, break_value: bool)
+    where
+        P: Fn(&Self) -> bool,
+    {
+        while self.current_item.is_some() && predicate(self) != break_value {
+            self.next();
         }
     }
 
@@ -67,13 +80,14 @@ impl<'a> Parser<'a> {
     where
         P: Fn(&Self) -> bool,
     {
-        while self.current_item.is_some() {
-            self.current_item = self.iterator.next();
+        self.parse_loop(predicate, false);
+    }
 
-            if !predicate(&self) {
-                break;
-            }
-        }
+    fn parse_until<P>(&mut self, predicate: P)
+    where
+        P: Fn(&Self) -> bool,
+    {
+        self.parse_loop(predicate, true);
     }
 
     fn parsed_str(&self) -> &'a str {
@@ -85,39 +99,34 @@ impl<'a> Parser<'a> {
 }
 
 pub fn parse(text: &str) -> Vec<Sequence> {
+    parse_newlines(text)
+}
+
+fn parse_newlines(text: &str) -> Vec<Sequence> {
     let mut parser = Parser::new(&text);
     let mut result = Vec::<Sequence>::new();
+
+    let mut line_number: usize = 1;
 
     while let Some(c) = parser.begin_parsing() {
         let token = match c {
             '\r' | '\n' => {
-                parser.parse_while(|p| matches!(p.current_item, Some((_, '\r' | '\n'))));
-
-                Token::NewLine
+                if c == '\r' {
+                    if let Some((_, '\n')) = parser.current_item {
+                        parser.next();
+                    }
+                }
+                line_number += 1;
+                Token::NewLine(line_number)
             }
             _ => {
-                if c.is_whitespace() {
-                    parser.parse_while(|p| match p.current_item {
-                        None | Some((_, '\r' | '\n')) => false,
-                        Some((_, c)) => c.is_whitespace(),
-                    });
-
-                    Token::Space
-                } else {
-                    parser.parse_while(|p| match p.current_item {
-                        None => false,
-                        Some((_, c)) => !c.is_whitespace(),
-                    });
-
-                    Token::Other
-                }
+                parser.parse_until(|p| matches!(p.current_item, Some((_, '\r' | '\n'))));
+                Token::Other
             }
         };
 
-        result.push(Sequence {
-            token,
-            text: parser.parsed_str(),
-        });
+        let text = parser.parsed_str();
+        result.push(Sequence { token, text });
     }
 
     result

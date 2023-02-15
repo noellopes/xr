@@ -85,19 +85,15 @@ fn generate_file(original_file: &PathBuf, contents: String, output: &mut Termina
 }
 
 fn write_output_to_file(mut file: File, result: Vec<parser::Sequence>) -> bool {
-    if file.write_all("1. ".as_bytes()).is_err() {
-        return false;
-    }
-
     for t in result {
-        let success = match t.token {
-            Token::NewLine(line_number) => file
-                .write_all(format!("{}{}. ", t.text, line_number).as_bytes())
-                .is_ok(),
-            _ => file.write_all(format!("[{}]", t.text).as_bytes()).is_ok(),
+        let text = match t.token {
+            Token::BeginSingleLineComment
+            | Token::BeginMultiLineComment
+            | Token::EndMultiLineComment => format!("[{}]", t.text),
+            _ => t.text.to_string(),
         };
 
-        if !success {
+        if file.write_all(text.as_bytes()).is_err() {
             return false;
         }
     }

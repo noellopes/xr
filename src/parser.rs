@@ -24,6 +24,9 @@ use std::{iter, str::CharIndices};
 
 #[derive(Copy, Clone, PartialEq)]
 pub enum Token {
+    BeginSingleLineComment,
+    BeginMultiLineComment,
+    EndMultiLineComment,
     NewLine(usize),
     Other,
 }
@@ -71,8 +74,12 @@ impl<'a> Parser<'a> {
     where
         P: Fn(&Self) -> bool,
     {
-        while self.current_item.is_some() && predicate(self) != break_value {
+        while self.current_item.is_some() {
             self.next();
+
+            if predicate(self) == break_value {
+                break;
+            }
         }
     }
 
@@ -99,15 +106,16 @@ impl<'a> Parser<'a> {
 }
 
 pub fn parse(text: &str) -> Vec<Sequence> {
-    parse_newlines(text)
+    let result = parse_newlines(text);
+    parse_begin_end_comments(result)
 }
 
 fn parse_newlines(text: &str) -> Vec<Sequence> {
-    let mut parser = Parser::new(&text);
     let mut result = Vec::<Sequence>::new();
 
     let mut line_number: usize = 1;
 
+    let mut parser = Parser::new(&text);
     while let Some(c) = parser.begin_parsing() {
         let token = match c {
             '\r' | '\n' => {
@@ -127,6 +135,64 @@ fn parse_newlines(text: &str) -> Vec<Sequence> {
 
         let text = parser.parsed_str();
         result.push(Sequence { token, text });
+    }
+
+    result
+}
+
+fn parse_begin_end_comments(sequences: Vec<Sequence>) -> Vec<Sequence> {
+    let mut result = Vec::<Sequence>::new();
+
+    for s in sequences {
+        if let Token::NewLine(_) = s.token {
+            result.push(s);
+        } else {
+            let mut parser = Parser::new(s.text);
+
+            while let Some(c) = parser.begin_parsing() {
+                let token = match c {
+                    '/' => match parser.current_item {
+                        Some((_, '/')) => Token::BeginSingleLineComment,
+                        Some((_, '*')) => Token::BeginMultiLineComment,
+                        _ => Token::Other,
+                    },
+                    '*' => match parser.current_item {
+                        Some((_, '/')) => Token::EndMultiLineComment,
+                        _ => Token::Other,
+                    },
+                    _ => Token::Other,
+                };
+
+                match token {
+                    Token::Other => loop {
+                        parser.parse_until(|p| matches!(p.current_item, Some((_, '/' | '*'))));
+
+                        match parser.current_item {
+                            Some((_, '/')) => {
+                                if let Some((_, '/' | '*')) = parser.iterator.peek() {
+                                    break;
+                                }
+                            }
+                            Some((_, '*')) => {
+                                if let Some((_, '/')) = parser.iterator.peek() {
+                                    break;
+                                }
+                            }
+                            None => {
+                                break;
+                            }
+                            _ => {}
+                        }
+                    },
+                    _ => {
+                        parser.next();
+                    }
+                }
+
+                let text = parser.parsed_str();
+                result.push(Sequence { token, text });
+            }
+        }
     }
 
     result

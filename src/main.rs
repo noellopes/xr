@@ -24,6 +24,7 @@ use std::{
     fs::{self, File},
     io::Write,
     path::PathBuf,
+    time::Instant,
 };
 
 mod arguments;
@@ -72,7 +73,10 @@ fn generate_file(original_file: &PathBuf, contents: String, output: &mut Termina
     } else {
         let filename = new_file.to_str().unwrap_or_default();
 
+        let start = Instant::now();
         let result = parser::parse(&contents);
+        let duration = start.elapsed();
+        output.writeln(format!("file parsed in {:?}", duration));
 
         if let Ok(file) = File::create(&new_file) {
             if !write_output_to_file(file, result, output) {
@@ -93,8 +97,10 @@ fn write_output_to_file(
 
     for t in result {
         let text = match t.token {
-            Token::SingleLineComment => format!("[{}]", t.text),
-            Token::MultiLineComment => format!("[[{}]]", t.text),
+            Token::NewLine(number) => {
+                line_number = number;
+                t.text.to_string()
+            }
             Token::Invalid(s) => {
                 output.writeln_warning(format!("(line {}) {}", line_number, s));
                 t.text.to_string()

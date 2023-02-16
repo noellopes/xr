@@ -74,8 +74,8 @@ fn generate_file(original_file: &PathBuf, contents: String, output: &mut Termina
 
         let result = parser::parse(&contents);
 
-        if let Ok(mut file) = File::create(&new_file) {
-            if !write_output_to_file(file, result) {
+        if let Ok(file) = File::create(&new_file) {
+            if !write_output_to_file(file, result, output) {
                 output.writeln_error(format!("Failed to write to file '{filename}'"));
             }
         } else {
@@ -84,12 +84,21 @@ fn generate_file(original_file: &PathBuf, contents: String, output: &mut Termina
     }
 }
 
-fn write_output_to_file(mut file: File, result: Vec<parser::Sequence>) -> bool {
+fn write_output_to_file(
+    mut file: File,
+    result: Vec<parser::Sequence<Token>>,
+    output: &mut TerminalOutput,
+) -> bool {
+    let mut line_number = 1;
+
     for t in result {
         let text = match t.token {
-            Token::BeginSingleLineComment
-            | Token::BeginMultiLineComment
-            | Token::EndMultiLineComment => format!("[{}]", t.text),
+            Token::SingleLineComment => format!("[{}]", t.text),
+            Token::MultiLineComment => format!("[[{}]]", t.text),
+            Token::Invalid(s) => {
+                output.writeln_warning(format!("(line {}) {}", line_number, s));
+                t.text.to_string()
+            }
             _ => t.text.to_string(),
         };
 

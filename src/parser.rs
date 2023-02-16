@@ -23,7 +23,7 @@
 use std::{iter, str::CharIndices};
 
 #[derive(Copy, Clone, PartialEq)]
-pub enum Token {
+pub enum AuxiliaryToken {
     BeginSingleLineComment,
     BeginMultiLineComment,
     EndMultiLineComment,
@@ -31,8 +31,26 @@ pub enum Token {
     Other,
 }
 
-pub struct Sequence<'a> {
-    pub token: Token,
+#[derive(PartialEq)]
+pub enum Token {
+    SingleLineComment,
+    MultiLineComment,
+    NewLine(usize),
+    Invalid(String),
+    Other,
+}
+
+impl Token {
+    fn from(token: AuxiliaryToken) -> Token {
+        match token {
+            AuxiliaryToken::NewLine(line_number) => Token::NewLine(line_number),
+            _ => Token::Other,
+        }
+    }
+}
+
+pub struct Sequence<'a, T: PartialEq> {
+    pub token: T,
     pub text: &'a str,
 }
 
@@ -105,13 +123,14 @@ impl<'a> Parser<'a> {
     }
 }
 
-pub fn parse(text: &str) -> Vec<Sequence> {
+pub fn parse(text: &str) -> Vec<Sequence<Token>> {
     let result = parse_newlines(text);
-    parse_begin_end_comments(result)
+    let result = parse_begin_end_comments(result);
+    parse_comments(text, result)
 }
 
-fn parse_newlines(text: &str) -> Vec<Sequence> {
-    let mut result = Vec::<Sequence>::new();
+fn parse_newlines(text: &str) -> Vec<Sequence<AuxiliaryToken>> {
+    let mut result = Vec::<Sequence<AuxiliaryToken>>::new();
 
     let mut line_number: usize = 1;
 
@@ -125,11 +144,11 @@ fn parse_newlines(text: &str) -> Vec<Sequence> {
                     }
                 }
                 line_number += 1;
-                Token::NewLine(line_number)
+                AuxiliaryToken::NewLine(line_number)
             }
             _ => {
                 parser.parse_until(|p| matches!(p.current_item, Some((_, '\r' | '\n'))));
-                Token::Other
+                AuxiliaryToken::Other
             }
         };
 
@@ -140,11 +159,13 @@ fn parse_newlines(text: &str) -> Vec<Sequence> {
     result
 }
 
-fn parse_begin_end_comments(sequences: Vec<Sequence>) -> Vec<Sequence> {
-    let mut result = Vec::<Sequence>::new();
+fn parse_begin_end_comments(
+    sequences: Vec<Sequence<AuxiliaryToken>>,
+) -> Vec<Sequence<AuxiliaryToken>> {
+    let mut result = Vec::<Sequence<AuxiliaryToken>>::new();
 
     for s in sequences {
-        if let Token::NewLine(_) = s.token {
+        if let AuxiliaryToken::NewLine(_) = s.token {
             result.push(s);
         } else {
             let mut parser = Parser::new(s.text);
@@ -152,19 +173,19 @@ fn parse_begin_end_comments(sequences: Vec<Sequence>) -> Vec<Sequence> {
             while let Some(c) = parser.begin_parsing() {
                 let token = match c {
                     '/' => match parser.current_item {
-                        Some((_, '/')) => Token::BeginSingleLineComment,
-                        Some((_, '*')) => Token::BeginMultiLineComment,
-                        _ => Token::Other,
+                        Some((_, '/')) => AuxiliaryToken::BeginSingleLineComment,
+                        Some((_, '*')) => AuxiliaryToken::BeginMultiLineComment,
+                        _ => AuxiliaryToken::Other,
                     },
                     '*' => match parser.current_item {
-                        Some((_, '/')) => Token::EndMultiLineComment,
-                        _ => Token::Other,
+                        Some((_, '/')) => AuxiliaryToken::EndMultiLineComment,
+                        _ => AuxiliaryToken::Other,
                     },
-                    _ => Token::Other,
+                    _ => AuxiliaryToken::Other,
                 };
 
                 match token {
-                    Token::Other => loop {
+                    AuxiliaryToken::Other => loop {
                         parser.parse_until(|p| matches!(p.current_item, Some((_, '/' | '*'))));
 
                         match parser.current_item {
@@ -193,6 +214,77 @@ fn parse_begin_end_comments(sequences: Vec<Sequence>) -> Vec<Sequence> {
                 result.push(Sequence { token, text });
             }
         }
+    }
+
+    result
+}
+
+fn parse_comments<'a>(
+    text: &'a str,
+    sequences: Vec<Sequence<AuxiliaryToken>>,
+) -> Vec<Sequence<'a, Token>> {
+    let mut result = Vec::<Sequence<Token>>::new();
+
+    let n = sequences.len();
+
+    let mut start_index: usize = 0;
+    let mut i: usize = 0;
+    while i < n {
+        let s = &sequences[i];
+        let mut end_index: usize = start_index + s.text.len();
+
+        i += 1;
+
+        let token = match s.token {
+            AuxiliaryToken::BeginSingleLineComment => {
+                while i < n {
+                    let s = &sequences[i];
+
+                    if let AuxiliaryToken::NewLine(_) = s.token {
+                        break;
+                    }
+
+                    end_index += s.text.len();
+                    i += 1;
+                }
+
+                Token::SingleLineComment
+            }
+            AuxiliaryToken::BeginMultiLineComment => {
+                let mut level: usize = 1;
+
+                while i < n {
+                    let s = &sequences[i];
+
+                    end_index += s.text.len();
+                    i += 1;
+
+                    match s.token {
+                        AuxiliaryToken::BeginMultiLineComment => level += 1,
+                        AuxiliaryToken::EndMultiLineComment => {
+                            level -= 1;
+                            if level == 0 {
+                                break;
+                            }
+                        }
+                        _ => (),
+                    }
+                }
+
+                Token::MultiLineComment
+            }
+            AuxiliaryToken::EndMultiLineComment => {
+                Token::Invalid(String::from("End comment detected without a beginning."))
+            }
+            _ => Token::from(s.token),
+        };
+
+        result.push(Sequence {
+            token,
+            text: &text[start_index..end_index],
+        });
+
+        start_index = end_index;
     }
 
     result

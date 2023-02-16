@@ -32,6 +32,12 @@ fn set_color(stream: &mut StandardStream, color_spec: &ColorSpec) {
     stream.set_color(color_spec).ok();
 }
 
+fn write<T: Display>(stream: &mut StandardStream, color_spec: &ColorSpec, text: T) {
+    set_color(stream, color_spec);
+    write!(stream, "{text}").ok();
+    set_color(stream, &default_color_spec());
+}
+
 fn default_color_spec() -> ColorSpec {
     ColorSpec::new()
 }
@@ -52,6 +58,10 @@ fn error_color_spec() -> ColorSpec {
     colored_bold_color_spec(Color::Red)
 }
 
+fn warn_color_spec() -> ColorSpec {
+    colored_bold_color_spec(Color::Yellow)
+}
+
 fn success_color_spec() -> ColorSpec {
     colored_bold_color_spec(Color::Green)
 }
@@ -65,15 +75,16 @@ impl TerminalOutput {
     }
 
     pub fn writeln_success<T: Display>(&mut self, text: T) {
-        set_color(&mut self.stdout, &success_color_spec());
-        write!(&mut self.stdout, "{text}").ok();
-        set_color(&mut self.stdout, &default_color_spec());
+        write(&mut self.stdout, &success_color_spec(), text);
     }
 
     pub fn writeln_error<T: Display>(&mut self, text: T) {
-        set_color(&mut self.stderr, &error_color_spec());
-        write!(&mut self.stderr, "Error: ").ok();
-        set_color(&mut self.stderr, &default_color_spec());
+        write(&mut self.stderr, &error_color_spec(), "Error: ");
+        writeln!(&mut self.stderr, "{text}").ok();
+    }
+
+    pub fn writeln_warning<T: Display>(&mut self, text: T) {
+        write(&mut self.stderr, &warn_color_spec(), "Warning: ");
         writeln!(&mut self.stderr, "{text}").ok();
     }
 

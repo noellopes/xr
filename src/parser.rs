@@ -27,6 +27,8 @@ pub enum AuxiliaryToken {
     BeginSingleLineComment,
     BeginMultiLineComment,
     EndMultiLineComment,
+    StrDelimiter,
+    CharDelimiter,
     NewLine(usize),
     Other,
 }
@@ -36,6 +38,8 @@ pub enum Token {
     SingleLineComment,
     MultiLineComment,
     NewLine(usize),
+    Str,
+    Char,
     Invalid(String),
     Other,
 }
@@ -44,6 +48,8 @@ impl Token {
     fn from(token: AuxiliaryToken) -> Token {
         match token {
             AuxiliaryToken::NewLine(line_number) => Token::NewLine(line_number),
+            AuxiliaryToken::CharDelimiter => Token::Char,
+            AuxiliaryToken::StrDelimiter => Token::Str,
             _ => Token::Other,
         }
     }
@@ -56,7 +62,7 @@ pub struct Sequence<'a, T: PartialEq> {
 
 pub struct Parser<'a> {
     iterator: iter::Peekable<CharIndices<'a>>,
-    current_item: Option<(usize, char)>,
+    next_item: Option<(usize, char)>,
     start_index: usize,
     text: &'a str,
 }
@@ -64,18 +70,18 @@ pub struct Parser<'a> {
 impl<'a> Parser<'a> {
     pub fn new(text: &'a str) -> Parser {
         let mut iterator = text.char_indices().peekable();
-        let current_item = iterator.next();
+        let next_item = iterator.next();
 
         Parser {
             iterator,
-            current_item,
+            next_item,
             start_index: 0,
             text,
         }
     }
 
     fn begin_parsing(&mut self) -> Option<char> {
-        if let Some((current_index, c)) = self.current_item {
+        if let Some((current_index, c)) = self.next_item {
             self.start_index = current_index;
             self.next();
             Some(c)
@@ -85,38 +91,34 @@ impl<'a> Parser<'a> {
     }
 
     fn next(&mut self) {
-        self.current_item = self.iterator.next();
+        self.next_item = self.iterator.next();
     }
 
-    fn parse_loop<P>(&mut self, predicate: P, break_value: bool)
-    where
-        P: Fn(&Self) -> bool,
-    {
-        while self.current_item.is_some() {
+    fn next_if<P: Fn(&mut Self) -> bool>(&mut self, predicate: P) -> bool {
+        if predicate(self) {
             self.next();
-
-            if predicate(self) == break_value {
-                break;
-            }
+            true
+        } else {
+            false
         }
     }
 
-    fn parse_while<P>(&mut self, predicate: P)
-    where
-        P: Fn(&Self) -> bool,
-    {
-        self.parse_loop(predicate, false);
+    fn peek(&mut self) -> Option<&char> {
+        if let Some((_, c)) = self.iterator.peek() {
+            Some(c)
+        } else {
+            None
+        }
     }
 
-    fn parse_until<P>(&mut self, predicate: P)
-    where
-        P: Fn(&Self) -> bool,
-    {
-        self.parse_loop(predicate, true);
+    fn parse_until<P: Fn(&Self) -> bool>(&mut self, predicate: P) {
+        while !predicate(self) {
+            self.next();
+        }
     }
 
     fn parsed_str(&self) -> &'a str {
-        match self.current_item {
+        match self.next_item {
             Some((end_index, _)) => &self.text[self.start_index..end_index],
             None => &self.text[self.start_index..],
         }
@@ -125,7 +127,7 @@ impl<'a> Parser<'a> {
 
 pub fn parse(text: &str) -> Vec<Sequence<Token>> {
     let result = parse_newlines(text);
-    let result = parse_begin_end_comments(result);
+    let result = parse_begin_end_comments_and_strings(result);
     parse_comments(text, result)
 }
 
@@ -139,15 +141,13 @@ fn parse_newlines(text: &str) -> Vec<Sequence<AuxiliaryToken>> {
         let token = match c {
             '\r' | '\n' => {
                 if c == '\r' {
-                    if let Some((_, '\n')) = parser.current_item {
-                        parser.next();
-                    }
+                    parser.next_if(|p| matches!(p.next_item, Some((_, '\n'))));
                 }
                 line_number += 1;
                 AuxiliaryToken::NewLine(line_number)
             }
             _ => {
-                parser.parse_until(|p| matches!(p.current_item, Some((_, '\r' | '\n'))));
+                parser.parse_until(|p| matches!(p.next_item, None | Some((_, '\r' | '\n'))));
                 AuxiliaryToken::Other
             }
         };
@@ -159,7 +159,7 @@ fn parse_newlines(text: &str) -> Vec<Sequence<AuxiliaryToken>> {
     result
 }
 
-fn parse_begin_end_comments(
+fn parse_begin_end_comments_and_strings(
     sequences: Vec<Sequence<AuxiliaryToken>>,
 ) -> Vec<Sequence<AuxiliaryToken>> {
     let mut result = Vec::<Sequence<AuxiliaryToken>>::new();
@@ -172,41 +172,52 @@ fn parse_begin_end_comments(
 
             while let Some(c) = parser.begin_parsing() {
                 let token = match c {
-                    '/' => match parser.current_item {
-                        Some((_, '/')) => AuxiliaryToken::BeginSingleLineComment,
-                        Some((_, '*')) => AuxiliaryToken::BeginMultiLineComment,
-                        _ => AuxiliaryToken::Other,
-                    },
-                    '*' => match parser.current_item {
-                        Some((_, '/')) => AuxiliaryToken::EndMultiLineComment,
-                        _ => AuxiliaryToken::Other,
-                    },
+                    '"' => AuxiliaryToken::StrDelimiter,
+                    '\'' => AuxiliaryToken::CharDelimiter,
+                    '/' => {
+                        let next_item = parser.next_item;
+                        parser.next();
+
+                        match next_item {
+                            Some((_, '/')) => AuxiliaryToken::BeginSingleLineComment,
+                            Some((_, '*')) => AuxiliaryToken::BeginMultiLineComment,
+                            _ => AuxiliaryToken::Other,
+                        }
+                    }
+                    '*' => {
+                        let next_item = parser.next_item;
+                        parser.next();
+
+                        match next_item {
+                            Some((_, '/')) => AuxiliaryToken::EndMultiLineComment,
+                            _ => AuxiliaryToken::Other,
+                        }
+                    }
                     _ => AuxiliaryToken::Other,
                 };
 
-                match token {
-                    AuxiliaryToken::Other => loop {
-                        parser.parse_until(|p| matches!(p.current_item, Some((_, '/' | '*'))));
+                if let AuxiliaryToken::Other = token {
+                    loop {
+                        parser.parse_until(|p| {
+                            matches!(p.next_item, None | Some((_, '/' | '*' | '"' | '\'')))
+                        });
 
-                        match parser.current_item {
+                        match parser.next_item {
                             Some((_, '/')) => {
-                                if let Some((_, '/' | '*')) = parser.iterator.peek() {
+                                if !parser.next_if(|p| !(matches!(p.peek(), Some('/' | '*')))) {
                                     break;
                                 }
                             }
                             Some((_, '*')) => {
-                                if let Some((_, '/')) = parser.iterator.peek() {
+                                if !parser.next_if(|p| !(matches!(p.peek(), Some('/')))) {
                                     break;
                                 }
                             }
-                            None => {
+                            None | Some((_, '"' | '\'')) => {
                                 break;
                             }
                             _ => {}
                         }
-                    },
-                    _ => {
-                        parser.next();
                     }
                 }
 
@@ -271,11 +282,17 @@ fn parse_comments<'a>(
                     }
                 }
 
-                Token::MultiLineComment
+                if level > 0 {
+                    Token::Invalid(format!(
+                        "Multiline comment not closed ({level} level(s) unclosed)."
+                    ))
+                } else {
+                    Token::MultiLineComment
+                }
             }
-            AuxiliaryToken::EndMultiLineComment => {
-                Token::Invalid(String::from("End comment detected without a beginning."))
-            }
+            AuxiliaryToken::EndMultiLineComment => Token::Invalid(String::from(
+                "Multiline end comment detected without a beginning.",
+            )),
             _ => Token::from(s.token),
         };
 

@@ -20,17 +20,50 @@
     DEALINGS IN THE SOFTWARE.
 */
 
-use std::{iter, str::CharIndices};
+use std::{slice::Iter, str::CharIndices};
 
 #[derive(Copy, Clone, PartialEq)]
-pub enum AuxiliaryToken {
+enum LevelOneToken {
+    LeftToRightSlash,
+    Asterisc,
+    CharDelimiter,
+    StrDelimiter,
+    NewLine,
+    Other,
+}
+
+impl From<char> for LevelOneToken {
+    fn from(value: char) -> Self {
+        match value {
+            '/' => LevelOneToken::LeftToRightSlash,
+            '*' => LevelOneToken::Asterisc,
+            '\'' => LevelOneToken::CharDelimiter,
+            '"' => LevelOneToken::StrDelimiter,
+            '\r' | '\n' => LevelOneToken::NewLine,
+            _ => LevelOneToken::Other,
+        }
+    }
+}
+
+#[derive(Copy, Clone, PartialEq)]
+enum LevelTwoToken {
     BeginSingleLineComment,
     BeginMultiLineComment,
     EndMultiLineComment,
-    StrDelimiter,
     CharDelimiter,
+    StrDelimiter,
     NewLine(usize),
     Other,
+}
+
+impl From<LevelOneToken> for LevelTwoToken {
+    fn from(value: LevelOneToken) -> Self {
+        match value {
+            LevelOneToken::CharDelimiter => LevelTwoToken::CharDelimiter,
+            LevelOneToken::StrDelimiter => LevelTwoToken::StrDelimiter,
+            _ => LevelTwoToken::Other,
+        }
+    }
 }
 
 #[derive(PartialEq)]
@@ -44,12 +77,10 @@ pub enum Token {
     Other,
 }
 
-impl Token {
-    fn from(token: AuxiliaryToken) -> Token {
+impl From<LevelTwoToken> for Token {
+    fn from(token: LevelTwoToken) -> Self {
         match token {
-            AuxiliaryToken::NewLine(line_number) => Token::NewLine(line_number),
-            AuxiliaryToken::CharDelimiter => Token::Char,
-            AuxiliaryToken::StrDelimiter => Token::Str,
+            LevelTwoToken::NewLine(line_number) => Token::NewLine(line_number),
             _ => Token::Other,
         }
     }
@@ -60,28 +91,44 @@ pub struct Sequence<'a, T: PartialEq> {
     pub text: &'a str,
 }
 
-pub struct Parser<'a> {
-    iterator: iter::Peekable<CharIndices<'a>>,
-    next_item: Option<(usize, char)>,
+trait Parser {
+    fn next(&mut self);
+
+    fn parse_while<P: Fn(&mut Self) -> bool>(&mut self, predicate: P) {
+        while predicate(self) {
+            self.next();
+        }
+    }
+
+    fn parse_until<P: Fn(&mut Self) -> bool>(&mut self, predicate: P) {
+        while !predicate(self) {
+            self.next();
+        }
+    }
+}
+
+struct StrParser<'a> {
+    iterator: CharIndices<'a>,
+    current_item: Option<(usize, char)>,
     start_index: usize,
     text: &'a str,
 }
 
-impl<'a> Parser<'a> {
-    pub fn new(text: &'a str) -> Parser {
-        let mut iterator = text.char_indices().peekable();
-        let next_item = iterator.next();
+impl<'a> StrParser<'a> {
+    fn new(text: &'a str) -> StrParser {
+        let mut iterator = text.char_indices();
+        let current_item = iterator.next();
 
-        Parser {
+        StrParser {
             iterator,
-            next_item,
+            current_item,
             start_index: 0,
             text,
         }
     }
 
     fn begin_parsing(&mut self) -> Option<char> {
-        if let Some((current_index, c)) = self.next_item {
+        if let Some((current_index, c)) = self.current_item {
             self.start_index = current_index;
             self.next();
             Some(c)
@@ -90,8 +137,49 @@ impl<'a> Parser<'a> {
         }
     }
 
+    fn parsed_str(&self) -> &'a str {
+        match self.current_item {
+            Some((end_index, _)) => &self.text[self.start_index..end_index],
+            None => &self.text[self.start_index..],
+        }
+    }
+}
+
+impl<'a> Parser for StrParser<'a> {
     fn next(&mut self) {
-        self.next_item = self.iterator.next();
+        self.current_item = self.iterator.next();
+    }
+}
+
+struct VecParser<'a, 'b, T: Copy + PartialEq> {
+    text: &'a str,
+    iterator: Iter<'b, Sequence<'b, T>>,
+    current_item: Option<&'b Sequence<'b, T>>,
+    next_item: Option<&'b Sequence<'b, T>>,
+    start_index: usize,
+    end_index: usize,
+}
+
+impl<'a, 'b, T: Copy + PartialEq> VecParser<'a, 'b, T> {
+    fn new(text: &'a str, vector: &'b Vec<Sequence<'b, T>>) -> VecParser<'a, 'b, T> {
+        let mut iterator = vector.iter();
+        let next_item = iterator.next();
+
+        VecParser {
+            text,
+            iterator,
+            current_item: None,
+            next_item,
+            start_index: 0,
+            end_index: 0,
+        }
+    }
+
+    fn begin_parsing(&mut self) -> Option<&Sequence<T>> {
+        self.start_index = self.end_index;
+        self.next();
+
+        self.current_item
     }
 
     fn next_if<P: Fn(&mut Self) -> bool>(&mut self, predicate: P) -> bool {
@@ -103,53 +191,99 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn peek(&mut self) -> Option<&char> {
-        if let Some((_, c)) = self.iterator.peek() {
-            Some(c)
-        } else {
-            None
-        }
+    fn current_token(&self) -> Option<T> {
+        Some(self.current_item?.token)
     }
 
-    fn parse_until<P: Fn(&Self) -> bool>(&mut self, predicate: P) {
-        while !predicate(self) {
-            self.next();
-        }
+    fn next_token(&self) -> Option<T> {
+        Some(self.next_item?.token)
     }
 
     fn parsed_str(&self) -> &'a str {
-        match self.next_item {
-            Some((end_index, _)) => &self.text[self.start_index..end_index],
-            None => &self.text[self.start_index..],
+        &self.text[self.start_index..self.end_index]
+    }
+}
+
+impl<'a, 'b, T: Copy + PartialEq> Parser for VecParser<'a, 'b, T> {
+    fn next(&mut self) {
+        self.current_item = self.next_item;
+        self.next_item = self.iterator.next();
+
+        if let Some(i) = self.current_item {
+            self.end_index += i.text.len();
         }
     }
 }
 
 pub fn parse(text: &str) -> Vec<Sequence<Token>> {
-    let result = parse_newlines(text);
-    let result = parse_begin_end_comments_and_strings(result);
-    parse_comments(text, result)
+    let result: Vec<Sequence<LevelOneToken>> = parse_level_one_tokens(text);
+    let result: Vec<Sequence<LevelTwoToken>> = parse_level_two_tokens(text, result);
+    parse_level_three_tokens(text, result)
 }
 
-fn parse_newlines(text: &str) -> Vec<Sequence<AuxiliaryToken>> {
-    let mut result = Vec::<Sequence<AuxiliaryToken>>::new();
+fn parse_level_one_tokens(text: &str) -> Vec<Sequence<LevelOneToken>> {
+    let mut result = Vec::<Sequence<LevelOneToken>>::new();
+
+    let mut parser = StrParser::new(&text);
+    while let Some(c) = parser.begin_parsing() {
+        let token = LevelOneToken::from(c);
+
+        if let LevelOneToken::NewLine | LevelOneToken::Other = token {
+            parser.parse_while(
+                |p| matches!(p.current_item, Some((_, c)) if LevelOneToken::from(c) == token),
+            );
+        }
+
+        let text = parser.parsed_str();
+        result.push(Sequence { token, text });
+    }
+
+    result
+}
+
+fn parse_level_two_tokens<'a>(
+    text: &'a str,
+    sequences: Vec<Sequence<LevelOneToken>>,
+) -> Vec<Sequence<'a, LevelTwoToken>> {
+    let mut result = Vec::<Sequence<LevelTwoToken>>::new();
 
     let mut line_number: usize = 1;
 
-    let mut parser = Parser::new(&text);
-    while let Some(c) = parser.begin_parsing() {
-        let token = match c {
-            '\r' | '\n' => {
-                if c == '\r' {
-                    parser.next_if(|p| matches!(p.next_item, Some((_, '\n'))));
+    let mut parser = VecParser::new(&text, &sequences);
+    while let Some(s) = parser.begin_parsing() {
+        let token = match s.token {
+            LevelOneToken::LeftToRightSlash => {
+                if parser
+                    .next_if(|p| matches!(p.next_token(), Some(LevelOneToken::LeftToRightSlash)))
+                {
+                    LevelTwoToken::BeginSingleLineComment
+                } else if parser
+                    .next_if(|p| matches!(p.next_token(), Some(LevelOneToken::Asterisc)))
+                {
+                    LevelTwoToken::BeginMultiLineComment
+                } else {
+                    LevelTwoToken::Other
                 }
-                line_number += 1;
-                AuxiliaryToken::NewLine(line_number)
             }
-            _ => {
-                parser.parse_until(|p| matches!(p.next_item, None | Some((_, '\r' | '\n'))));
-                AuxiliaryToken::Other
+            LevelOneToken::Asterisc => {
+                if parser
+                    .next_if(|p| matches!(p.next_token(), Some(LevelOneToken::LeftToRightSlash)))
+                {
+                    LevelTwoToken::EndMultiLineComment
+                } else {
+                    LevelTwoToken::Other
+                }
             }
+            LevelOneToken::NewLine => {
+                for c in s.text.chars() {
+                    if c == '\n' {
+                        line_number += 1;
+                    }
+                }
+
+                LevelTwoToken::NewLine(line_number)
+            }
+            other => LevelTwoToken::from(other),
         };
 
         let text = parser.parsed_str();
@@ -159,127 +293,49 @@ fn parse_newlines(text: &str) -> Vec<Sequence<AuxiliaryToken>> {
     result
 }
 
-fn parse_begin_end_comments_and_strings(
-    sequences: Vec<Sequence<AuxiliaryToken>>,
-) -> Vec<Sequence<AuxiliaryToken>> {
-    let mut result = Vec::<Sequence<AuxiliaryToken>>::new();
-
-    for s in sequences {
-        if let AuxiliaryToken::NewLine(_) = s.token {
-            result.push(s);
-        } else {
-            let mut parser = Parser::new(s.text);
-
-            while let Some(c) = parser.begin_parsing() {
-                let token = match c {
-                    '"' => AuxiliaryToken::StrDelimiter,
-                    '\'' => AuxiliaryToken::CharDelimiter,
-                    '/' => {
-                        let next_item = parser.next_item;
-                        parser.next();
-
-                        match next_item {
-                            Some((_, '/')) => AuxiliaryToken::BeginSingleLineComment,
-                            Some((_, '*')) => AuxiliaryToken::BeginMultiLineComment,
-                            _ => AuxiliaryToken::Other,
-                        }
-                    }
-                    '*' => {
-                        let next_item = parser.next_item;
-                        parser.next();
-
-                        match next_item {
-                            Some((_, '/')) => AuxiliaryToken::EndMultiLineComment,
-                            _ => AuxiliaryToken::Other,
-                        }
-                    }
-                    _ => AuxiliaryToken::Other,
-                };
-
-                if let AuxiliaryToken::Other = token {
-                    loop {
-                        parser.parse_until(|p| {
-                            matches!(p.next_item, None | Some((_, '/' | '*' | '"' | '\'')))
-                        });
-
-                        match parser.next_item {
-                            Some((_, '/')) => {
-                                if !parser.next_if(|p| !(matches!(p.peek(), Some('/' | '*')))) {
-                                    break;
-                                }
-                            }
-                            Some((_, '*')) => {
-                                if !parser.next_if(|p| !(matches!(p.peek(), Some('/')))) {
-                                    break;
-                                }
-                            }
-                            None | Some((_, '"' | '\'')) => {
-                                break;
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-
-                let text = parser.parsed_str();
-                result.push(Sequence { token, text });
-            }
-        }
-    }
-
-    result
-}
-
-fn parse_comments<'a>(
+fn parse_level_three_tokens<'a>(
     text: &'a str,
-    sequences: Vec<Sequence<AuxiliaryToken>>,
+    sequences: Vec<Sequence<LevelTwoToken>>,
 ) -> Vec<Sequence<'a, Token>> {
     let mut result = Vec::<Sequence<Token>>::new();
 
-    let n = sequences.len();
-
-    let mut start_index: usize = 0;
-    let mut i: usize = 0;
-    while i < n {
-        let s = &sequences[i];
-        let mut end_index: usize = start_index + s.text.len();
-
-        i += 1;
-
+    let mut parser = VecParser::new(&text, &sequences);
+    while let Some(s) = parser.begin_parsing() {
         let token = match s.token {
-            AuxiliaryToken::BeginSingleLineComment => {
-                while i < n {
-                    let s = &sequences[i];
-
-                    if let AuxiliaryToken::NewLine(_) = s.token {
-                        break;
-                    }
-
-                    end_index += s.text.len();
-                    i += 1;
-                }
-
+            LevelTwoToken::BeginSingleLineComment => {
+                parser.parse_until(|p| {
+                    matches!(p.next_token(), None | Some(LevelTwoToken::NewLine(_)))
+                });
                 Token::SingleLineComment
             }
-            AuxiliaryToken::BeginMultiLineComment => {
+            LevelTwoToken::BeginMultiLineComment => {
                 let mut level: usize = 1;
 
-                while i < n {
-                    let s = &sequences[i];
+                loop {
+                    parser.next();
 
-                    end_index += s.text.len();
-                    i += 1;
+                    parser.parse_until(|p| {
+                        matches!(
+                            p.current_token(),
+                            None | Some(
+                                LevelTwoToken::BeginMultiLineComment
+                                    | LevelTwoToken::EndMultiLineComment
+                            )
+                        )
+                    });
 
-                    match s.token {
-                        AuxiliaryToken::BeginMultiLineComment => level += 1,
-                        AuxiliaryToken::EndMultiLineComment => {
+                    match parser.current_token() {
+                        Some(LevelTwoToken::BeginMultiLineComment) => level += 1,
+                        Some(LevelTwoToken::EndMultiLineComment) => {
                             level -= 1;
                             if level == 0 {
                                 break;
                             }
                         }
-                        _ => (),
-                    }
+                        _ => {
+                            break;
+                        }
+                    };
                 }
 
                 if level > 0 {
@@ -290,18 +346,16 @@ fn parse_comments<'a>(
                     Token::MultiLineComment
                 }
             }
-            AuxiliaryToken::EndMultiLineComment => Token::Invalid(String::from(
+            LevelTwoToken::EndMultiLineComment => Token::Invalid(String::from(
                 "Multiline end comment detected without a beginning.",
             )),
-            _ => Token::from(s.token),
+            // LevelTwoToken::CharDelimiter => todo!(),
+            // LevelTwoToken::StrDelimiter => todo!(),
+            other => Token::from(other),
         };
 
-        result.push(Sequence {
-            token,
-            text: &text[start_index..end_index],
-        });
-
-        start_index = end_index;
+        let text = parser.parsed_str();
+        result.push(Sequence { token, text });
     }
 
     result

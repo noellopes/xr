@@ -38,6 +38,12 @@ fn write<T: Display>(stream: &mut StandardStream, color_spec: &ColorSpec, text: 
     set_color(stream, &default_color_spec());
 }
 
+fn writeln<T: Display>(stream: &mut StandardStream, color_spec: &ColorSpec, text: T) {
+    set_color(stream, color_spec);
+    writeln!(stream, "{text}").ok();
+    set_color(stream, &default_color_spec());
+}
+
 fn default_color_spec() -> ColorSpec {
     ColorSpec::new()
 }
@@ -66,6 +72,10 @@ fn success_color_spec() -> ColorSpec {
     colored_bold_color_spec(Color::Green)
 }
 
+fn info_color_spec() -> ColorSpec {
+    colored_bold_color_spec(Color::Cyan)
+}
+
 impl TerminalOutput {
     pub fn new() -> TerminalOutput {
         TerminalOutput {
@@ -75,7 +85,11 @@ impl TerminalOutput {
     }
 
     pub fn writeln_success<T: Display>(&mut self, text: T) {
-        write(&mut self.stdout, &success_color_spec(), text);
+        writeln(&mut self.stdout, &success_color_spec(), text);
+    }
+
+    pub fn writeln_info<T: Display>(&mut self, text: T) {
+        writeln(&mut self.stdout, &info_color_spec(), text);
     }
 
     pub fn writeln_error<T: Display>(&mut self, text: T) {

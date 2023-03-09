@@ -57,7 +57,7 @@ fn main() {
 fn process_file(file: &PathBuf, output: &mut TerminalOutput) {
     let filename = file.to_str().unwrap_or_default();
 
-    output.writeln(format!("Processing file '{filename}'"));
+    output.writeln_info(format!("Processing file '{filename}'"));
 
     match fs::read_to_string(file) {
         Ok(contents) => generate_file(file, contents, output),
@@ -102,7 +102,7 @@ fn write_output_to_file(
                 t.text.to_string()
             }
             Token::Invalid(s) => {
-                output.writeln_warning(format!("(line {}) {}", line_number, s));
+                output.writeln_error(format!("(line {}) {}", line_number, s));
                 t.text.to_string()
             }
             _ => t.text.to_string(),

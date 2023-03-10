@@ -24,7 +24,8 @@ use std::{slice::Iter, str::CharIndices};
 
 #[derive(Copy, Clone, PartialEq)]
 enum LevelOneToken {
-    LeftToRightSlash,
+    BackSlash,
+    ForwardSlash,
     Asterisc,
     CharDelimiter,
     StrDelimiter,
@@ -35,18 +36,20 @@ enum LevelOneToken {
 impl From<char> for LevelOneToken {
     fn from(value: char) -> Self {
         match value {
-            '/' => LevelOneToken::LeftToRightSlash,
-            '*' => LevelOneToken::Asterisc,
-            '\'' => LevelOneToken::CharDelimiter,
-            '"' => LevelOneToken::StrDelimiter,
-            '\r' | '\n' => LevelOneToken::NewLine,
-            _ => LevelOneToken::Other,
+            '\\' => Self::BackSlash,
+            '/' => Self::ForwardSlash,
+            '*' => Self::Asterisc,
+            '\'' => Self::CharDelimiter,
+            '"' => Self::StrDelimiter,
+            '\r' | '\n' => Self::NewLine,
+            _ => Self::Other,
         }
     }
 }
 
 #[derive(Copy, Clone, PartialEq)]
 enum LevelTwoToken {
+    BackSlash,
     BeginSingleLineComment,
     BeginMultiLineComment,
     EndMultiLineComment,
@@ -59,9 +62,10 @@ enum LevelTwoToken {
 impl From<LevelOneToken> for LevelTwoToken {
     fn from(value: LevelOneToken) -> Self {
         match value {
-            LevelOneToken::CharDelimiter => LevelTwoToken::CharDelimiter,
-            LevelOneToken::StrDelimiter => LevelTwoToken::StrDelimiter,
-            _ => LevelTwoToken::Other,
+            LevelOneToken::BackSlash => Self::BackSlash,
+            LevelOneToken::CharDelimiter => Self::CharDelimiter,
+            LevelOneToken::StrDelimiter => Self::StrDelimiter,
+            _ => Self::Other,
         }
     }
 }
@@ -71,8 +75,8 @@ pub enum Token {
     SingleLineComment,
     MultiLineComment,
     NewLine(usize),
-    Str,
-    Char,
+    StrLiteral,
+    CharLiteral,
     Invalid(String),
     Other,
 }
@@ -80,9 +84,31 @@ pub enum Token {
 impl From<LevelTwoToken> for Token {
     fn from(token: LevelTwoToken) -> Self {
         match token {
-            LevelTwoToken::NewLine(line_number) => Token::NewLine(line_number),
-            _ => Token::Other,
+            LevelTwoToken::NewLine(line_number) => Self::NewLine(line_number),
+            _ => Self::Other,
         }
+    }
+}
+
+impl Token {
+    fn char_literal(unclosed: bool) -> Self {
+        if unclosed {
+            Self::Invalid(String::from("Unclosed char literal found"))
+        } else {
+            Self::CharLiteral
+        }
+    }
+
+    fn unclosed_multi_line_comment(unclosed_levels: usize) -> Self {
+        Self::Invalid(format!(
+            "Multiline comment not closed ({unclosed_levels} level(s) unclosed)."
+        ))
+    }
+
+    fn multi_line_comment_without_beggining() -> Self {
+        Self::Invalid(String::from(
+            "Multiline end comment detected without a beginning.",
+        ))
     }
 }
 
@@ -252,37 +278,9 @@ fn parse_level_two_tokens<'a>(
     let mut parser = VecParser::new(&text, &sequences);
     while let Some(s) = parser.begin_parsing() {
         let token = match s.token {
-            LevelOneToken::LeftToRightSlash => {
-                if parser
-                    .next_if(|p| matches!(p.next_token(), Some(LevelOneToken::LeftToRightSlash)))
-                {
-                    LevelTwoToken::BeginSingleLineComment
-                } else if parser
-                    .next_if(|p| matches!(p.next_token(), Some(LevelOneToken::Asterisc)))
-                {
-                    LevelTwoToken::BeginMultiLineComment
-                } else {
-                    LevelTwoToken::Other
-                }
-            }
-            LevelOneToken::Asterisc => {
-                if parser
-                    .next_if(|p| matches!(p.next_token(), Some(LevelOneToken::LeftToRightSlash)))
-                {
-                    LevelTwoToken::EndMultiLineComment
-                } else {
-                    LevelTwoToken::Other
-                }
-            }
-            LevelOneToken::NewLine => {
-                for c in s.text.chars() {
-                    if c == '\n' {
-                        line_number += 1;
-                    }
-                }
-
-                LevelTwoToken::NewLine(line_number)
-            }
+            LevelOneToken::ForwardSlash => parse_possible_comment_token(&mut parser),
+            LevelOneToken::Asterisc => parse_possible_end_multi_line_comment(&mut parser),
+            LevelOneToken::NewLine => parse_new_lines(s.text, &mut line_number),
             other => LevelTwoToken::from(other),
         };
 
@@ -291,6 +289,33 @@ fn parse_level_two_tokens<'a>(
     }
 
     result
+}
+
+fn parse_new_lines(text: &str, line_number: &mut usize) -> LevelTwoToken {
+    for c in text.chars() {
+        if c == '\n' {
+            *line_number += 1;
+        }
+    }
+    LevelTwoToken::NewLine(*line_number)
+}
+
+fn parse_possible_end_multi_line_comment(parser: &mut VecParser<LevelOneToken>) -> LevelTwoToken {
+    if parser.next_if(|p| matches!(p.next_token(), Some(LevelOneToken::ForwardSlash))) {
+        LevelTwoToken::EndMultiLineComment
+    } else {
+        LevelTwoToken::Other
+    }
+}
+
+fn parse_possible_comment_token(parser: &mut VecParser<LevelOneToken>) -> LevelTwoToken {
+    if parser.next_if(|p| matches!(p.next_token(), Some(LevelOneToken::ForwardSlash))) {
+        LevelTwoToken::BeginSingleLineComment
+    } else if parser.next_if(|p| matches!(p.next_token(), Some(LevelOneToken::Asterisc))) {
+        LevelTwoToken::BeginMultiLineComment
+    } else {
+        LevelTwoToken::Other
+    }
 }
 
 fn parse_level_three_tokens<'a>(
@@ -302,54 +327,10 @@ fn parse_level_three_tokens<'a>(
     let mut parser = VecParser::new(&text, &sequences);
     while let Some(s) = parser.begin_parsing() {
         let token = match s.token {
-            LevelTwoToken::BeginSingleLineComment => {
-                parser.parse_until(|p| {
-                    matches!(p.next_token(), None | Some(LevelTwoToken::NewLine(_)))
-                });
-                Token::SingleLineComment
-            }
-            LevelTwoToken::BeginMultiLineComment => {
-                let mut level: usize = 1;
-
-                loop {
-                    parser.next();
-
-                    parser.parse_until(|p| {
-                        matches!(
-                            p.current_token(),
-                            None | Some(
-                                LevelTwoToken::BeginMultiLineComment
-                                    | LevelTwoToken::EndMultiLineComment
-                            )
-                        )
-                    });
-
-                    match parser.current_token() {
-                        Some(LevelTwoToken::BeginMultiLineComment) => level += 1,
-                        Some(LevelTwoToken::EndMultiLineComment) => {
-                            level -= 1;
-                            if level == 0 {
-                                break;
-                            }
-                        }
-                        _ => {
-                            break;
-                        }
-                    };
-                }
-
-                if level > 0 {
-                    Token::Invalid(format!(
-                        "Multiline comment not closed ({level} level(s) unclosed)."
-                    ))
-                } else {
-                    Token::MultiLineComment
-                }
-            }
-            LevelTwoToken::EndMultiLineComment => Token::Invalid(String::from(
-                "Multiline end comment detected without a beginning.",
-            )),
-            // LevelTwoToken::CharDelimiter => todo!(),
+            LevelTwoToken::BeginSingleLineComment => parse_single_line_comment(&mut parser),
+            LevelTwoToken::BeginMultiLineComment => parse_multi_line_comment(&mut parser),
+            LevelTwoToken::EndMultiLineComment => Token::multi_line_comment_without_beggining(),
+            LevelTwoToken::CharDelimiter => parse_char_literal(&mut parser),
             // LevelTwoToken::StrDelimiter => todo!(),
             other => Token::from(other),
         };
@@ -359,4 +340,59 @@ fn parse_level_three_tokens<'a>(
     }
 
     result
+}
+
+fn parse_char_literal(parser: &mut VecParser<LevelTwoToken>) -> Token {
+    parser.next();
+
+    //todo: complete function
+
+    if let Some(s) = parser.current_item {
+        //todo: check for lifetime elisions
+    }
+
+    if parser.next_if(|p| matches!(p.next_token(), Some(LevelTwoToken::BackSlash))) {
+        parser.parse_until(|p| {
+            matches!(p.current_token(), None | Some(LevelTwoToken::CharDelimiter))
+        });
+
+        Token::char_literal(parser.current_item.is_none())
+    } else {
+        Token::Other
+    }
+}
+
+fn parse_single_line_comment(parser: &mut VecParser<LevelTwoToken>) -> Token {
+    parser.parse_until(|p| matches!(p.next_token(), None | Some(LevelTwoToken::NewLine(_))));
+    Token::SingleLineComment
+}
+
+fn parse_multi_line_comment(parser: &mut VecParser<LevelTwoToken>) -> Token {
+    let mut level: usize = 1;
+
+    loop {
+        parser.next();
+
+        parser.parse_until(|p| {
+            matches!(
+                p.current_token(),
+                None | Some(
+                    LevelTwoToken::BeginMultiLineComment | LevelTwoToken::EndMultiLineComment
+                )
+            )
+        });
+
+        match parser.current_token() {
+            Some(LevelTwoToken::BeginMultiLineComment) => level += 1,
+            Some(LevelTwoToken::EndMultiLineComment) => {
+                level -= 1;
+                if level == 0 {
+                    return Token::MultiLineComment;
+                }
+            }
+            _ => {
+                return Token::unclosed_multi_line_comment(level);
+            }
+        };
+    }
 }

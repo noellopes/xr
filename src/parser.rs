@@ -30,6 +30,8 @@ enum LevelOneToken {
     CharDelimiter,
     StrDelimiter,
     NewLine,
+    Digit,
+    UnderscoreLetter,
     Other,
 }
 
@@ -42,6 +44,8 @@ impl From<char> for LevelOneToken {
             '\'' => Self::CharDelimiter,
             '"' => Self::StrDelimiter,
             '\r' | '\n' => Self::NewLine,
+            '_' | 'a'..='z' | 'A'..='Z' => Self::UnderscoreLetter,
+            '0'..='9' => Self::Digit,
             _ => Self::Other,
         }
     }
@@ -55,6 +59,7 @@ enum LevelTwoToken {
     EndMultiLineComment,
     CharDelimiter,
     StrDelimiter,
+    Word,
     NewLine(usize),
     Other,
 }
@@ -77,6 +82,7 @@ pub enum Token {
     NewLine(usize),
     StrLiteral,
     CharLiteral,
+    LifetimeElision,
     Invalid(String),
     Other,
 }
@@ -91,12 +97,12 @@ impl From<LevelTwoToken> for Token {
 }
 
 impl Token {
-    fn char_literal(unclosed: bool) -> Self {
-        if unclosed {
-            Self::Invalid(String::from("Unclosed char literal found"))
-        } else {
-            Self::CharLiteral
-        }
+    fn unclosed_char_literal() -> Self {
+        Self::Invalid(String::from("Unclosed char or lifetime elision"))
+    }
+
+    fn invalid_char_literal() -> Token {
+        Self::Invalid(String::from("Invalid char literal"))
     }
 
     fn unclosed_multi_line_comment(unclosed_levels: usize) -> Self {
@@ -130,6 +136,11 @@ trait Parser {
         while !predicate(self) {
             self.next();
         }
+    }
+
+    fn advance_and_parse_until<P: Fn(&mut Self) -> bool>(&mut self, predicate: P) {
+        self.next();
+        self.parse_until(predicate)
     }
 }
 
@@ -280,7 +291,11 @@ fn parse_level_two_tokens<'a>(
         let token = match s.token {
             LevelOneToken::ForwardSlash => parse_possible_comment_token(&mut parser),
             LevelOneToken::Asterisc => parse_possible_end_multi_line_comment(&mut parser),
-            LevelOneToken::NewLine => parse_new_lines(s.text, &mut line_number),
+            LevelOneToken::UnderscoreLetter => parse_word(&mut parser),
+            LevelOneToken::NewLine => {
+                line_number += cout_new_lines(s.text);
+                LevelTwoToken::NewLine(line_number)
+            }
             other => LevelTwoToken::from(other),
         };
 
@@ -291,13 +306,26 @@ fn parse_level_two_tokens<'a>(
     result
 }
 
-fn parse_new_lines(text: &str, line_number: &mut usize) -> LevelTwoToken {
+fn cout_new_lines(text: &str) -> usize {
+    let mut new_lines = 0;
+
     for c in text.chars() {
         if c == '\n' {
-            *line_number += 1;
+            new_lines += 1;
         }
     }
-    LevelTwoToken::NewLine(*line_number)
+
+    new_lines
+}
+
+fn parse_word(parser: &mut VecParser<LevelOneToken>) -> LevelTwoToken {
+    parser.parse_while(|p| {
+        matches!(
+            p.next_token(),
+            Some(LevelOneToken::UnderscoreLetter | LevelOneToken::Digit)
+        )
+    });
+    LevelTwoToken::Word
 }
 
 fn parse_possible_end_multi_line_comment(parser: &mut VecParser<LevelOneToken>) -> LevelTwoToken {
@@ -330,7 +358,7 @@ fn parse_level_three_tokens<'a>(
             LevelTwoToken::BeginSingleLineComment => parse_single_line_comment(&mut parser),
             LevelTwoToken::BeginMultiLineComment => parse_multi_line_comment(&mut parser),
             LevelTwoToken::EndMultiLineComment => Token::multi_line_comment_without_beggining(),
-            LevelTwoToken::CharDelimiter => parse_char_literal(&mut parser),
+            LevelTwoToken::CharDelimiter => parse_char_literal_or_elison(&mut parser),
             // LevelTwoToken::StrDelimiter => todo!(),
             other => Token::from(other),
         };
@@ -342,23 +370,43 @@ fn parse_level_three_tokens<'a>(
     result
 }
 
-fn parse_char_literal(parser: &mut VecParser<LevelTwoToken>) -> Token {
+fn parse_char_literal_or_elison(parser: &mut VecParser<LevelTwoToken>) -> Token {
     parser.next();
 
-    //todo: complete function
-
-    if let Some(s) = parser.current_item {
-        //todo: check for lifetime elisions
+    match parser.current_token() {
+        Some(token) => {
+            match token {
+                LevelTwoToken::BackSlash => {
+                    parser.next(); // ignore at least the next token that might be a CharDelimiter
+                    parse_until_close_char_literal(parser)
+                }
+                LevelTwoToken::Word => {
+                    if parser
+                        .next_if(|p| matches!(p.next_token(), Some(LevelTwoToken::CharDelimiter)))
+                    {
+                        Token::CharLiteral
+                    } else {
+                        Token::LifetimeElision
+                    }
+                }
+                LevelTwoToken::StrDelimiter | LevelTwoToken::Other => {
+                    parse_until_close_char_literal(parser)
+                }
+                _ => Token::invalid_char_literal(),
+            }
+        }
+        None => Token::unclosed_char_literal(),
     }
+}
 
-    if parser.next_if(|p| matches!(p.next_token(), Some(LevelTwoToken::BackSlash))) {
-        parser.parse_until(|p| {
-            matches!(p.current_token(), None | Some(LevelTwoToken::CharDelimiter))
-        });
+fn parse_until_close_char_literal(parser: &mut VecParser<LevelTwoToken>) -> Token {
+    parser.advance_and_parse_until(|p| {
+        matches!(p.current_token(), None | Some(LevelTwoToken::CharDelimiter))
+    });
 
-        Token::char_literal(parser.current_item.is_none())
-    } else {
-        Token::Other
+    match parser.current_item {
+        None => Token::unclosed_char_literal(),
+        _ => Token::CharLiteral,
     }
 }
 
@@ -371,9 +419,7 @@ fn parse_multi_line_comment(parser: &mut VecParser<LevelTwoToken>) -> Token {
     let mut level: usize = 1;
 
     loop {
-        parser.next();
-
-        parser.parse_until(|p| {
+        parser.advance_and_parse_until(|p| {
             matches!(
                 p.current_token(),
                 None | Some(

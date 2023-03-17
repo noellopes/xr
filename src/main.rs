@@ -105,7 +105,7 @@ fn write_output_to_file(
                 output.writeln_error(format!("(line {}) {}", line_number, s));
                 t.text.to_string()
             }
-            Token::CharLiteral => format!("[{}]", t.text),
+            Token::StrLiteral => format!("😀{}😀", t.text),
             _ => t.text.to_string(),
         };
 

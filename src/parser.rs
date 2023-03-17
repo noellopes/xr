@@ -24,44 +24,61 @@ use std::{slice::Iter, str::CharIndices};
 
 #[derive(Copy, Clone, PartialEq)]
 enum LevelOneToken {
-    BackSlash,
-    ForwardSlash,
     Asterisc,
+    BackSlash,
     CharDelimiter,
-    StrDelimiter,
-    NewLine,
     Digit,
-    UnderscoreLetter,
+    ForwardSlash,
+    Hash,
+    LowerCaseB,
+    LowerCaseR,
+    NewLine,
     Other,
+    StrDelimiter,
+    UnderscoreLetter,
 }
 
 impl From<char> for LevelOneToken {
     fn from(value: char) -> Self {
         match value {
-            '\\' => Self::BackSlash,
-            '/' => Self::ForwardSlash,
             '*' => Self::Asterisc,
+            '\\' => Self::BackSlash,
             '\'' => Self::CharDelimiter,
+            '/' => Self::ForwardSlash,
+            '#' => Self::Hash,
+            'b' => Self::LowerCaseB,
+            'r' => Self::LowerCaseR,
             '"' => Self::StrDelimiter,
+            '0'..='9' => Self::Digit,
             '\r' | '\n' => Self::NewLine,
             '_' | 'a'..='z' | 'A'..='Z' => Self::UnderscoreLetter,
-            '0'..='9' => Self::Digit,
             _ => Self::Other,
         }
+    }
+}
+
+impl LevelOneToken {
+    fn is_greedy(&self) -> bool {
+        matches!(
+            self,
+            Self::Digit | Self::Hash | Self::NewLine | Self::Other | Self::UnderscoreLetter
+        )
     }
 }
 
 #[derive(Copy, Clone, PartialEq)]
 enum LevelTwoToken {
     BackSlash,
-    BeginSingleLineComment,
     BeginMultiLineComment,
-    EndMultiLineComment,
+    BeginSingleLineComment,
     CharDelimiter,
-    StrDelimiter,
-    Word,
+    EndMultiLineComment,
+    Hash,
     NewLine(usize),
     Other,
+    StrDelimiter,
+    StrPrefix,
+    Word,
 }
 
 impl From<LevelOneToken> for LevelTwoToken {
@@ -69,6 +86,7 @@ impl From<LevelOneToken> for LevelTwoToken {
         match value {
             LevelOneToken::BackSlash => Self::BackSlash,
             LevelOneToken::CharDelimiter => Self::CharDelimiter,
+            LevelOneToken::Hash => Self::Hash,
             LevelOneToken::StrDelimiter => Self::StrDelimiter,
             _ => Self::Other,
         }
@@ -77,14 +95,14 @@ impl From<LevelOneToken> for LevelTwoToken {
 
 #[derive(PartialEq)]
 pub enum Token {
-    SingleLineComment,
+    CharLiteral,
+    Invalid(String),
+    LifetimeElision,
     MultiLineComment,
     NewLine(usize),
-    StrLiteral,
-    CharLiteral,
-    LifetimeElision,
-    Invalid(String),
     Other,
+    SingleLineComment,
+    StrLiteral,
 }
 
 impl From<LevelTwoToken> for Token {
@@ -97,12 +115,22 @@ impl From<LevelTwoToken> for Token {
 }
 
 impl Token {
-    fn unclosed_char_literal() -> Self {
-        Self::Invalid(String::from("Unclosed char or lifetime elision"))
-    }
-
     fn invalid_char_literal() -> Token {
         Self::Invalid(String::from("Invalid char literal"))
+    }
+
+    fn invalid_raw_string_literal() -> Token {
+        Self::Invalid(String::from("Invalid raw string literal"))
+    }
+
+    fn multi_line_comment_without_beggining() -> Self {
+        Self::Invalid(String::from(
+            "Multiline end comment detected without a beginning.",
+        ))
+    }
+
+    fn unclosed_char_literal() -> Self {
+        Self::Invalid(String::from("Unclosed char or lifetime elision"))
     }
 
     fn unclosed_multi_line_comment(unclosed_levels: usize) -> Self {
@@ -111,10 +139,8 @@ impl Token {
         ))
     }
 
-    fn multi_line_comment_without_beggining() -> Self {
-        Self::Invalid(String::from(
-            "Multiline end comment detected without a beginning.",
-        ))
+    fn unclosed_string_literal() -> Self {
+        Self::Invalid(String::from("Unclosed string literal"))
     }
 }
 
@@ -232,8 +258,16 @@ impl<'a, 'b, T: Copy + PartialEq> VecParser<'a, 'b, T> {
         Some(self.current_item?.token)
     }
 
+    fn current_text(&self) -> Option<&str> {
+        Some(self.current_item?.text)
+    }
+
     fn next_token(&self) -> Option<T> {
         Some(self.next_item?.token)
+    }
+
+    fn next_token_is(&self, value: T) -> bool {
+        matches!(self.next_token(), Some(value))
     }
 
     fn parsed_str(&self) -> &'a str {
@@ -265,7 +299,7 @@ fn parse_level_one_tokens(text: &str) -> Vec<Sequence<LevelOneToken>> {
     while let Some(c) = parser.begin_parsing() {
         let token = LevelOneToken::from(c);
 
-        if let LevelOneToken::NewLine | LevelOneToken::Other = token {
+        if token.is_greedy() {
             parser.parse_while(
                 |p| matches!(p.current_item, Some((_, c)) if LevelOneToken::from(c) == token),
             );
@@ -289,13 +323,18 @@ fn parse_level_two_tokens<'a>(
     let mut parser = VecParser::new(&text, &sequences);
     while let Some(s) = parser.begin_parsing() {
         let token = match s.token {
-            LevelOneToken::ForwardSlash => parse_possible_comment_token(&mut parser),
             LevelOneToken::Asterisc => parse_possible_end_multi_line_comment(&mut parser),
-            LevelOneToken::UnderscoreLetter => parse_word(&mut parser),
+            LevelOneToken::ForwardSlash => parse_possible_comment_token(&mut parser),
+            LevelOneToken::LowerCaseB => {
+                parser.next_if(|p| p.next_token_is(LevelOneToken::LowerCaseR));
+                LevelTwoToken::StrPrefix
+            }
+            LevelOneToken::LowerCaseR => LevelTwoToken::StrPrefix,
             LevelOneToken::NewLine => {
                 line_number += cout_new_lines(s.text);
                 LevelTwoToken::NewLine(line_number)
             }
+            LevelOneToken::UnderscoreLetter => parse_word(&mut parser),
             other => LevelTwoToken::from(other),
         };
 
@@ -322,14 +361,19 @@ fn parse_word(parser: &mut VecParser<LevelOneToken>) -> LevelTwoToken {
     parser.parse_while(|p| {
         matches!(
             p.next_token(),
-            Some(LevelOneToken::UnderscoreLetter | LevelOneToken::Digit)
+            Some(
+                LevelOneToken::UnderscoreLetter
+                    | LevelOneToken::Digit
+                    | LevelOneToken::LowerCaseB
+                    | LevelOneToken::LowerCaseR
+            )
         )
     });
     LevelTwoToken::Word
 }
 
 fn parse_possible_end_multi_line_comment(parser: &mut VecParser<LevelOneToken>) -> LevelTwoToken {
-    if parser.next_if(|p| matches!(p.next_token(), Some(LevelOneToken::ForwardSlash))) {
+    if parser.next_if(|p| p.next_token_is(LevelOneToken::ForwardSlash)) {
         LevelTwoToken::EndMultiLineComment
     } else {
         LevelTwoToken::Other
@@ -337,9 +381,9 @@ fn parse_possible_end_multi_line_comment(parser: &mut VecParser<LevelOneToken>) 
 }
 
 fn parse_possible_comment_token(parser: &mut VecParser<LevelOneToken>) -> LevelTwoToken {
-    if parser.next_if(|p| matches!(p.next_token(), Some(LevelOneToken::ForwardSlash))) {
+    if parser.next_if(|p| p.next_token_is(LevelOneToken::ForwardSlash)) {
         LevelTwoToken::BeginSingleLineComment
-    } else if parser.next_if(|p| matches!(p.next_token(), Some(LevelOneToken::Asterisc))) {
+    } else if parser.next_if(|p| p.next_token_is(LevelOneToken::Asterisc)) {
         LevelTwoToken::BeginMultiLineComment
     } else {
         LevelTwoToken::Other
@@ -355,11 +399,12 @@ fn parse_level_three_tokens<'a>(
     let mut parser = VecParser::new(&text, &sequences);
     while let Some(s) = parser.begin_parsing() {
         let token = match s.token {
-            LevelTwoToken::BeginSingleLineComment => parse_single_line_comment(&mut parser),
             LevelTwoToken::BeginMultiLineComment => parse_multi_line_comment(&mut parser),
-            LevelTwoToken::EndMultiLineComment => Token::multi_line_comment_without_beggining(),
+            LevelTwoToken::BeginSingleLineComment => parse_single_line_comment(&mut parser),
             LevelTwoToken::CharDelimiter => parse_char_literal_or_elison(&mut parser),
-            // LevelTwoToken::StrDelimiter => todo!(),
+            LevelTwoToken::EndMultiLineComment => Token::multi_line_comment_without_beggining(),
+            LevelTwoToken::StrDelimiter => parse_string_literal(&mut parser, false, 0),
+            LevelTwoToken::StrPrefix => parse_possible_string_literal(&mut parser),
             other => Token::from(other),
         };
 
@@ -370,31 +415,77 @@ fn parse_level_three_tokens<'a>(
     result
 }
 
+fn parse_possible_string_literal(parser: &mut VecParser<LevelTwoToken>) -> Token {
+    if let Some(s) = parser.next_item {
+        match s.token {
+            LevelTwoToken::Hash => parse_raw_string_literal(parser, s.text.len()),
+            LevelTwoToken::StrDelimiter => parse_raw_string_literal(parser, 0),
+            _ => Token::Other,
+        }
+    } else {
+        Token::Other
+    }
+}
+
+fn parse_raw_string_literal(parser: &mut VecParser<LevelTwoToken>, hash_len: usize) -> Token {
+    parser.next();
+
+    if hash_len > 0 && !parser.next_if(|p| p.next_token_is(LevelTwoToken::StrDelimiter)) {
+        Token::invalid_raw_string_literal()
+    } else {
+        parse_string_literal(parser, true, hash_len)
+    }
+}
+
+fn parse_string_literal(
+    parser: &mut VecParser<LevelTwoToken>,
+    raw_string: bool,
+    hash_len: usize,
+) -> Token {
+    loop {
+        parser.next();
+
+        match parser.current_token() {
+            Some(LevelTwoToken::BackSlash) if !raw_string => {
+                parser.next(); // ignore at least the next token that might be a StrDelimiter
+            }
+            Some(LevelTwoToken::StrDelimiter) => {
+                if hash_len == 0 {
+                    return Token::StrLiteral;
+                } else {
+                    if let Some(s) = parser.next_item {
+                        if s.token == LevelTwoToken::Hash && hash_len == s.text.len() {
+                            parser.next();
+                            return Token::StrLiteral;
+                        }
+                    }
+                }
+            }
+            None => return Token::unclosed_string_literal(),
+            _ => {}
+        }
+    }
+}
+
 fn parse_char_literal_or_elison(parser: &mut VecParser<LevelTwoToken>) -> Token {
     parser.next();
 
     match parser.current_token() {
-        Some(token) => {
-            match token {
-                LevelTwoToken::BackSlash => {
-                    parser.next(); // ignore at least the next token that might be a CharDelimiter
-                    parse_until_close_char_literal(parser)
-                }
-                LevelTwoToken::Word => {
-                    if parser
-                        .next_if(|p| matches!(p.next_token(), Some(LevelTwoToken::CharDelimiter)))
-                    {
-                        Token::CharLiteral
-                    } else {
-                        Token::LifetimeElision
-                    }
-                }
-                LevelTwoToken::StrDelimiter | LevelTwoToken::Other => {
-                    parse_until_close_char_literal(parser)
-                }
-                _ => Token::invalid_char_literal(),
+        Some(LevelTwoToken::BackSlash) => {
+            parser.next(); // ignore at least the next token that might be a CharDelimiter
+            parse_until_close_char_literal(parser)
+        }
+        Some(LevelTwoToken::Word) => {
+            if parser.next_if(|p| p.next_token_is(LevelTwoToken::CharDelimiter)) {
+                Token::CharLiteral
+            } else {
+                Token::LifetimeElision
             }
         }
+        Some(LevelTwoToken::StrDelimiter | LevelTwoToken::Other) => {
+            parse_until_close_char_literal(parser)
+        }
+        Some(_) => Token::invalid_char_literal(),
         None => Token::unclosed_char_literal(),
     }
 }

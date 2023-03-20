@@ -258,16 +258,16 @@ impl<'a, 'b, T: Copy + PartialEq> VecParser<'a, 'b, T> {
         Some(self.current_item?.token)
     }
 
-    fn current_text(&self) -> Option<&str> {
-        Some(self.current_item?.text)
-    }
+    // fn current_text(&self) -> Option<&str> {
+    //     Some(self.current_item?.text)
+    // }
 
     fn next_token(&self) -> Option<T> {
         Some(self.next_item?.token)
     }
 
     fn next_token_is(&self, value: T) -> bool {
-        matches!(self.next_token(), Some(value))
+        matches!(self.next_token(), Some(token) if (token == value))
     }
 
     fn parsed_str(&self) -> &'a str {
@@ -475,7 +475,7 @@ fn parse_char_literal_or_elison(parser: &mut VecParser<LevelTwoToken>) -> Token 
             parser.next(); // ignore at least the next token that might be a CharDelimiter
             parse_until_close_char_literal(parser)
         }
-        Some(LevelTwoToken::Word) => {
+        Some(LevelTwoToken::Word | LevelTwoToken::StrPrefix) => {
             if parser.next_if(|p| p.next_token_is(LevelTwoToken::CharDelimiter)) {
                 Token::CharLiteral
             } else {

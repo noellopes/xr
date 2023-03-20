@@ -64,9 +64,9 @@ fn error_color_spec() -> ColorSpec {
     colored_bold_color_spec(Color::Red)
 }
 
-fn warn_color_spec() -> ColorSpec {
-    colored_bold_color_spec(Color::Yellow)
-}
+// fn warn_color_spec() -> ColorSpec {
+//     colored_bold_color_spec(Color::Yellow)
+// }
 
 fn success_color_spec() -> ColorSpec {
     colored_bold_color_spec(Color::Green)
@@ -97,10 +97,10 @@ impl TerminalOutput {
         writeln!(&mut self.stderr, "{text}").ok();
     }
 
-    pub fn writeln_warning<T: Display>(&mut self, text: T) {
-        write(&mut self.stderr, &warn_color_spec(), "Warning: ");
-        writeln!(&mut self.stderr, "{text}").ok();
-    }
+    // pub fn writeln_warning<T: Display>(&mut self, text: T) {
+    //     write(&mut self.stderr, &warn_color_spec(), "Warning: ");
+    //     writeln!(&mut self.stderr, "{text}").ok();
+    // }
 
     pub fn writeln<T: Display>(&mut self, text: T) {
         writeln!(&mut self.stdout, "{text}").ok();
